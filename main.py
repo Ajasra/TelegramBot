@@ -1,11 +1,17 @@
 import html
 import os
 import re
+import time
 from contextlib import contextmanager
+from pathlib import Path
+
+from PIL import Image
 
 import google.generativeai as genai
 import psycopg2
+import telebot.formatting
 
+# from telebot.async_telebot import AsyncTeleBot
 import telebot
 from langchain.chains import LLMChain
 from langchain_openai import ChatOpenAI
@@ -17,9 +23,6 @@ from google.ai.generativelanguage_v1beta.types.content import Content, Part
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 
-import markdown
-
-# load .env
 from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -27,7 +30,9 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CR_DATABASE_URL = os.getenv("CR_DATABASE_URL")
 
+logging = True
 
+# bot = AsyncTeleBot('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 model_name = ["gemini", "gpt-3.5-turbo", "gpt-3.5-turbo-16k"]
 
@@ -61,19 +66,19 @@ PREDEFINED_SYSTEM_MESSAGE = ("Profile\n"
                              "Facilitate Reflection: Encourage users to reflect on their perceptions of machines and the potential for collaborative creativity, using questions and scenarios that challenge conventional thinking. Always provide different perspectives to bring more awareness to the topic.")
                              # "Format: Always use Markdown formatting to make the text more readable and visually appealing.\n")
 
-# Step 4: Store conversations in memory (simple implementation)
 conversations = {}
 models = {}
+photos = {}
 
 generation_config = {
     "temperature": 0.4,
     "top_p": 1,
     "top_k": 32,
-    "max_output_tokens": 4096,
+    "max_output_tokens": 8192,
 }
 
-db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, CR_DATABASE_URL)
-
+if logging:
+    db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, CR_DATABASE_URL)
 
 @contextmanager
 def get_db_cursor():
@@ -98,87 +103,36 @@ def write_history_to_db(chat_id, prompt, answer, user_name="", user_id=0):
     :param answer:
     :return:
     """
-    with get_db_cursor() as cursor:
-        if cursor:
-            cursor.execute(
-                "INSERT INTO history (chat_id, question, answer, time, user_name, user_id) VALUES (%s, %s, %s, NOW(), %s, %s)",
-                (chat_id, prompt, answer, user_name, user_id)
-            )
-            return cursor.rowcount == 1
-    return False
+    if logging:
+        with get_db_cursor() as cursor:
+            if cursor:
+                cursor.execute(
+                    "INSERT INTO history (chat_id, question, answer, time, user_name, user_id) VALUES (%s, %s, %s, NOW(), %s, %s)",
+                    (chat_id, prompt, answer, user_name, user_id)
+                )
+                return cursor.rowcount == 1
+        return False
+    else:
+        return True
 
 
-def escape_markdown(text):
-    # List of special characters that need to be escaped
-    escape_chars = r'_[]()~`>\+-=|{}.!'
-    # return html.escape(text)
-    return ''.join('\\'+char if char in escape_chars else char for char in text)
-
-def convert_to_markdown(text):
-    # Split the text into lines
-    lines = text.split('\n')
-
-    # Process each line
-    for i in range(len(lines)):
-        line = lines[i].strip()
-
-        # Convert headers
-        if line.startswith('**') and line.endswith('**'):
-            line = '# ' + line[2:-2]
-
-        # Convert bullet points
-        elif line.startswith('* '):
-            line = '- ' + line[2:]
-
-        # Convert bold text
-        line = re.sub(r'\*\*(.*?)\*\*', r'**\1**', line)
-
-        # Convert italic text
-        line = re.sub(r'\*(.*?)\*', r'*\1*', line)
-
-        lines[i] = line
-
-    # Join the lines back together
-    return '\n'.join(lines)
-
-
-def convert_markdown_to_html(markdown_text):
-    # Convert Markdown to HTML
-    html_text = markdown.markdown(markdown_text)
-
-    # Telegram's HTML mode only supports a subset of HTML tags
-    # So, we replace unsupported HTML tags with equivalent supported ones or remove them
-
-    # Replace <h1>, <h2>, <h3> (headers) with <b> (bold)
-    for h in ['h1', 'h2', 'h3']:
-        html_text = html_text.replace('<' + h + '>', '*').replace('</' + h + '>', '*')
-
-    # Remove <h4>, <h5>, <h6> (headers)
-    for h in ['h4', 'h5', 'h6']:
-        html_text = html_text.replace('<' + h + '>', '').replace('</' + h + '>', '')
-
-    # Remove <img> (image)
-    html_text = re.sub(r'<img[^>]*>', '', html_text)
-
-    # Replace <p> (paragraph) with \n (newline)
-    html_text = html_text.replace('<p>', '\n').replace('</p>', '\n')
-
-    # Replace <br> (line break) with \n (newline)
-    html_text = html_text.replace('<br>', '\n')
-
-    # Replace <em> (italic) with _ (underscore)
-    html_text = html_text.replace('<em>', '_').replace('</em>', '_')
-
-    # Replace <strong> (bold) with * (asterisk)
-    html_text = html_text.replace('<strong>', '*').replace('</strong>', '*')
-
-    # Replace <code> (inline fixed-width code) with ` (backtick)
-    html_text = html_text.replace('<code>', '`').replace('</code>', '`')
-
-    # Replace <pre> (pre-formatted fixed-width code block) with ``` (triple backticks)
-    html_text = html_text.replace('<pre>', '```').replace('</pre>', '```')
-
-    return html_text
+def get_history_from_db(chat_id, limit=5):
+    """
+    Get history from database
+    :param chat_id:
+    :return:
+    """
+    if logging:
+        with get_db_cursor() as cursor:
+            if cursor:
+                cursor.execute(
+                    "SELECT * FROM history WHERE chat_id = %s ORDER BY time DESC LIMIT %s",
+                    (chat_id, limit)
+                )
+                return cursor.fetchall()
+        return []
+    else:
+        return []
 
 
 # Step 5: Handle start command
@@ -192,6 +146,23 @@ def send_welcome(message):
     models[message.chat.id] = model_name[0]
 
 
+@bot.message_handler(content_types=['photo'])
+def photo(message):
+    chat_id = message.chat.id
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+
+    with open('temp.png', 'wb') as new_file:
+        new_file.write(downloaded_file)
+
+    img = Image.open('temp.png')
+
+    if chat_id not in photos:
+        photos[chat_id] = []
+
+    photos[chat_id].append(img)
+
+
 # Step 6: Handle text messages
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -202,11 +173,10 @@ def handle_message(message):
 
     if chat_id not in conversations:
         conversations[chat_id] = []
+        # get history from db
         models[message.chat.id] = model_name[0]
 
     if models[chat_id] == "gemini":
-
-        model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
 
         if len(conversations[chat_id]) == 0:
             user_message = Content({"role": "user", "parts": [Part(text="hi")]})
@@ -214,8 +184,31 @@ def handle_message(message):
             bot_message = Content({"role": "model", "parts": [Part(text=PREDEFINED_SYSTEM_MESSAGE)]})
             conversations[chat_id].append(bot_message)
 
-        chat = model.start_chat(history=conversations[chat_id])
-        response = chat.send_message(input_text)
+            history = get_history_from_db(chat_id)
+            # reverse history
+            history.reverse()
+            for hist in history:
+                user_message = Content({"role": "user", "parts": [Part(text=hist["question"])]})
+                conversations[chat_id].append(user_message)
+                bot_message = Content({"role": "model", "parts": [Part(text=hist["answer"])]})
+                conversations[chat_id].append(bot_message)
+
+        if chat_id in photos and photos[chat_id]:
+            try:
+                img = photos[chat_id].pop()
+                prompt = PREDEFINED_SYSTEM_MESSAGE + "user input: " + input_text
+                model = genai.GenerativeModel('gemini-pro-vision')
+                response = model.generate_content(contents=[prompt, img])
+                response.resolve()
+            except Exception as err:
+                print(err)
+                model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
+                chat = model.start_chat(history=conversations[chat_id])
+                response = chat.send_message(input_text)
+        else:
+            model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
+            chat = model.start_chat(history=conversations[chat_id])
+            response = chat.send_message(input_text)
         bot_reply = response.text
 
         user_message = Content({"role": "user", "parts": [Part(text=input_text)]})
@@ -245,8 +238,6 @@ def handle_message(message):
                     {"question": hist["prompt"]},
                     {"output": hist["answer"]})
 
-        print(memory_obj)
-
         chain = LLMChain(
             llm=llm,
             prompt=prompt_template,
@@ -262,21 +253,21 @@ def handle_message(message):
     except Exception as err:
         print(err)
 
-    # bot_reply = markdown.markdown(bot_reply)
-    # bot_reply = escape_markdown(bot_reply)
-    # bot_reply = convert_to_markdown(bot_reply)
-    # Send the message with MarkdownV2 parsing
-    # bot.send_message(chat_id, bot_reply, parse_mode='MarkdownV2')
-
     try:
-        markdown_text = convert_markdown_to_html(bot_reply)
+        markdown_text = telebot.formatting.escape_markdown(bot_reply)
         bot.send_message(chat_id, markdown_text, parse_mode='MarkdownV2')
     except Exception as err:
         try:
-            bot.send_message(chat_id, bot_reply, parse_mode='HTML')
+            html_text = telebot.formatting.escape_html(bot_reply)
+            bot.send_message(chat_id, html_text, parse_mode='HTML')
         except Exception as err:
             print(err)
             bot.send_message(chat_id, bot_reply)
 
 
-bot.polling()
+while True:
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Bot polling failed, restarting in 5 seconds. Error:\n{e}")
+        time.sleep(5)
