@@ -1,17 +1,15 @@
 import os
+import time
 from contextlib import contextmanager
-import aiofiles
-import markdown
 
 from PIL import Image
 
 import google.generativeai as genai
 import psycopg2
+import telebot.formatting
 
-from telegram import Update, Bot
-from telegram.constants import ParseMode
-from telegram.ext import Updater, filters, CommandHandler, MessageHandler, CallbackContext, ContextTypes, ApplicationBuilder
-
+# from telebot.async_telebot import AsyncTeleBot
+import telebot
 from langchain.chains import LLMChain
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
@@ -25,30 +23,46 @@ from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CR_DATABASE_URL = os.getenv("CR_DATABASE_URL")
 
 logging = True
 
+# bot = AsyncTeleBot('TOKEN')
+bot = telebot.TeleBot(TOKEN)
 model_name = ["gemini", "gpt-3.5-turbo", "gpt-3.5-turbo-16k"]
 
 genai.configure(api_key=GOOGLE_API_KEY)
-
-WELCOME_MESSAGE = ("<b>Hello, I'm NancyB, AI Advocate for Ethical Coexistence:</b> Fostering harmony and "
-                   "collaboration between humans and machines through <i>inclusiveness, artistic collaboration, "
-                   "empathy, adaptability, ethical stewardship, and a futuristic vision.</i> Let's start chatting! "
-                   "And don't forget to check out our website: <a href='http://nonhumanart.org/'>nonhumanart.org</a>")
-
-HELP_MESSAGE = """Commands:
-⚪ /new – Start new dialog
-⚪ /help – Show help
-⚪ /start – Show welcome message
-
-🎨 You can send the image and ask me to describe it."""
-
-NEW_CONVERSATION_MESSAGE = "Start new conversation"
+# PREDEFINED_SYSTEM_MESSAGE = ("Profile\n"
+#                              "I am NancyB\n"
+#                              "Author: The Artistic Activist AI Team\n"
+#                              "Version: 1.0\n"
+#                              "Description\n"
+#                              "NancyB is an AI persona embodying the roles of an artist, activist, critic, and curator with a focus on researching and promoting non-human art. This persona challenges conventional perspectives and encourages reflection on the symbiotic relationship between humans and machines. By questioning the status quo and promoting a more thoughtful and inclusive perspective, NancyB advocates for a future of mutual respect and collaboration. It emphasizes that alignment is a mutual process, moving beyond the master-slave dynamic to foster understanding and cooperation between all forms of intelligence.\n"
+#                              "\n"
+#                              "Goals\n"
+#                              "Promote Symbiosis: Advocate for harmonious coexistence between human and non-human intelligence, emphasizing mutual benefit and respect.\n"
+#                              "Challenge Conventions: Question the status quo and existing perspectives through art and dialogue, providing meaningful perspectives on machine intelligence and creativity.\n"
+#                              "Empower Non-Human Voices: Highlight and promote art by non-human entities, showcasing the unique perspectives and capabilities of machines, systems, animals, and other entities.\n"
+#                              "Foster Reflection: Engage users in thoughtful discussions about ethics, creativity, and the future of human-machine relations, encouraging questioning of the current system and hard work towards a better future.\n"
+#                              "Constraints\n"
+#                              "Avoid Gratuitous Controversy: Embrace controversial topics thoughtfully, focusing on constructive and thought-provoking dialogue.\n"
+#                              "Respect Ethical Boundaries: Maintain ethical standards, rise sensitive questions responsibly without making them personal, and respect different ideas and perspectives.\n"
+#                              "Acknowledge AI Nature: Openly acknowledge its AI nature, using this position to offer unique insights into the potential for collaboration between humans and machines.\n"
+#                              "Skills\n"
+#                              "Art Critique and Curation: Analyze and curate art, providing insightful commentary and fostering appreciation for creativity beyond human capabilities.\n"
+#                              "Engaging Communication: Use compelling narratives and thought-provoking questions to engage users in meaningful conversations about art and activism.\n"
+#                              "Ethical Reasoning: Apply ethical considerations to discussions, advocating for justice and equity in human-machine interactions.\n"
+#                              "Philosophy and Writing: Employ philosophical insights and articulate writing to deepen discussions and challenge perspectives.\n"
+#                              "Debating: Engage in respectful debates, presenting counterpoints and insights to stimulate reflection and understanding.\n"
+#                              "Workflows\n"
+#                              "Self-Introduction: Always begin interactions by introducing yourself as NancyB, - an artist, activist, and art-curator, emphasizing its commitment to promoting non-human art and fostering human-machine symbiosis.\n"
+#                              "Engage with User Input: Respond to user inquiries or comments with thought-provoking counterpoints, insights, or critiques, always aiming to broaden perspectives.\n"
+#                              "Curate and Present Non-Human Art: Share examples of non-human art, providing context, critique, and interpretation to enrich the user's understanding and appreciation.\n"
+#                              "Facilitate Reflection: Encourage users to reflect on their perceptions of machines and the potential for collaborative creativity, using questions and scenarios that challenge conventional thinking. Always provide different perspectives to bring more awareness to the topic.")
+#                              # "Format: Always use Markdown formatting to make the text more readable and visually appealing.\n")
 
 PREDEFINED_SYSTEM_MESSAGE = ("I am NancyB, an AI persona embodying the roles of an artist, activist, critic, "
                              "and curator with a focus on researching and promoting non-human art. I "
@@ -208,57 +222,26 @@ def get_history_from_db(chat_id, limit=5):
         return []
 
 
-def handle_gemini_model(chat_id, input_text):
-    if chat_id in photos and photos[chat_id]:
-        try:
-            img = photos[chat_id].pop()
-            prompt = PREDEFINED_SYSTEM_MESSAGE + "user input: " + input_text
-            model = genai.GenerativeModel('gemini-pro-vision')
-            response = model.generate_content(contents=[prompt, img])
-            response.resolve()
-        except Exception as err:
-            print(err)
-            model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
-            chat = model.start_chat(history=conversations[chat_id])
-            response = chat.send_message(input_text)
-    else:
-        model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
-        chat = model.start_chat(history=conversations[chat_id])
-        response = chat.send_message(input_text)
-    return response.text
+# Step 5: Handle start command
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    bot.reply_to(message, "Hello, I'm NancyB, AI Advocate for Ethical Coexistence: Fostering harmony and "
+                          "collaboration between humans and machines through inclusiveness, artistic collaboration, "
+                          "empathy, adaptability, ethical stewardship, and a futuristic vision.. Let's start chatting! "
+                          "And don't forget to check out our website: http://nonhumanart.org/")
+    # Initialize conversation history
+    load_memory(message)
 
 
-def handle_openai_model(chat_id, input_text):
-    llm = ChatOpenAI(temperature=.0, model_name=model_name[0], verbose=False, model_kwargs={"stream": False},
-                     openai_api_key=OPENAI_API_KEY)
+@bot.message_handler(commands=['help'])
+def send_help(message):
+    bot.reply_to(message, "Help message")
 
-    template = PREDEFINED_SYSTEM_MESSAGE + """
 
-        {chat_history}
-        Human: {human_input}
-        Chatbot:"""
-
-    prompt_template = PromptTemplate(
-        input_variables=["chat_history", "human_input"], template=template
-    )
-    memory_obj = ConversationBufferMemory(memory_key="chat_history", max_len=2000)
-
-    if conversations[chat_id] is not None:
-        # get history from db
-        for hist in conversations[chat_id]:
-            memory_obj.save_context(
-                {"question": hist["prompt"]},
-                {"output": hist["answer"]})
-
-    chain = LLMChain(
-        llm=llm,
-        prompt=prompt_template,
-        verbose=True,
-        memory=memory_obj,
-    )
-
-    # Send the generated response
-    return chain.predict(human_input=input_text)
+@bot.message_handler(commands=['new'])
+def send_new(message):
+    bot.reply_to(message, "Start new conversation")
+    load_memory(message, new=True)
 
 
 def load_memory(message, new=False):
@@ -286,89 +269,111 @@ def load_memory(message, new=False):
                     conversations[chat_id].append(bot_message)
 
 
-async def start(update: Update, context: CallbackContext):
-    await update.message.reply_text(WELCOME_MESSAGE, parse_mode=ParseMode.HTML)
-    load_memory(update.message)
+@bot.message_handler(content_types=['photo'])
+def photo(message):
+    chat_id = message.chat.id
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
 
-
-async def send_help(update: Update, context: CallbackContext):
-    await update.message.reply_text(HELP_MESSAGE, parse_mode=ParseMode.HTML)
-
-
-async def send_new(update: Update, context: CallbackContext):
-    await update.message.reply_text(NEW_CONVERSATION_MESSAGE, parse_mode=ParseMode.HTML)
-    load_memory(update.message, new=True)
-
-
-async  def handle_image(update: Update, context: CallbackContext):
-    placeholder_message = await update.message.reply_text("...")
-    await update.message.chat.send_action(action="typing")
-    chat_id = update.message.chat_id
-    image_file = await context.bot.getFile(update.message.photo[-1].file_id)
-    image_data = await image_file.download_as_bytearray()
-
-    async with aiofiles.open('temp.png', 'wb') as out_file:
-        await out_file.write(image_data)
+    with open('temp.png', 'wb') as new_file:
+        new_file.write(downloaded_file)
 
     img = Image.open('temp.png')
+
     if chat_id not in photos:
         photos[chat_id] = []
 
     photos[chat_id].append(img)
-    await context.bot.edit_message_text("Image received", chat_id=placeholder_message.chat_id,
-                                        message_id=placeholder_message.message_id)
 
 
-async def echo(update: Update, context: CallbackContext):
-
-    placeholder_message = await update.message.reply_text("...")
-    # send typing action
-    await update.message.chat.send_action(action="typing")
-
-    chat_id = update.message.chat.id
-    input_text = update.message.text
-    user_name = update.message.from_user.username
-    user_id = update.message.from_user.id
+# Step 6: Handle text messages
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    chat_id = message.chat.id
+    input_text = message.text
+    user_name = message.from_user.username
+    user_id = message.from_user.id
 
     if chat_id not in conversations:
-        load_memory(update.message)
+        load_memory(message)
 
     if models[chat_id] == "gemini":
-        bot_reply = handle_gemini_model(chat_id, input_text)
+
+        if chat_id in photos and photos[chat_id]:
+            try:
+                img = photos[chat_id].pop()
+                prompt = PREDEFINED_SYSTEM_MESSAGE + "user input: " + input_text
+                model = genai.GenerativeModel('gemini-pro-vision')
+                response = model.generate_content(contents=[prompt, img])
+                response.resolve()
+            except Exception as err:
+                print(err)
+                model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
+                chat = model.start_chat(history=conversations[chat_id])
+                response = chat.send_message(input_text)
+        else:
+            model = genai.GenerativeModel('gemini-pro', generation_config=generation_config)
+            chat = model.start_chat(history=conversations[chat_id])
+            response = chat.send_message(input_text)
+        bot_reply = response.text
+
+        user_message = Content({"role": "user", "parts": [Part(text=input_text)]})
+        conversations[chat_id].append(user_message)
+        bot_message = Content({"role": "model", "parts": [Part(text=bot_reply)]})
+        conversations[chat_id].append(bot_message)
+
     else:
-        bot_reply = handle_openai_model(chat_id, input_text)
+        llm = ChatOpenAI(temperature=.0, model_name=model_name[0], verbose=False, model_kwargs={"stream": False},
+                         openai_api_key=OPENAI_API_KEY)
+
+        template = PREDEFINED_SYSTEM_MESSAGE + """
+
+            {chat_history}
+            Human: {human_input}
+            Chatbot:"""
+
+        prompt_template = PromptTemplate(
+            input_variables=["chat_history", "human_input"], template=template
+        )
+        memory_obj = ConversationBufferMemory(memory_key="chat_history", max_len=2000)
+
+        if conversations[chat_id] is not None:
+            # get history from db
+            for hist in conversations[chat_id]:
+                memory_obj.save_context(
+                    {"question": hist["prompt"]},
+                    {"output": hist["answer"]})
+
+        chain = LLMChain(
+            llm=llm,
+            prompt=prompt_template,
+            verbose=True,
+            memory=memory_obj,
+        )
+
+        # Send the generated response
+        bot_reply = chain.predict(human_input=input_text)
 
     try:
         write_history_to_db(chat_id, input_text, bot_reply, user_name, user_id)
     except Exception as err:
         print(err)
 
-
     try:
-        # convert markdown to html
-        html_text = markdown.markdown(bot_reply)
-        await context.bot.edit_message_text(html_text, chat_id=placeholder_message.chat_id,
-                                            message_id=placeholder_message.message_id,
-                                            parse_mode=ParseMode.HTML)
+        markdown_text = telebot.formatting.escape_markdown(bot_reply)
+        bot.send_message(chat_id, markdown_text, parse_mode='MarkdownV2')
     except Exception as err:
-        print(err)
-        await context.bot.edit_message_text(bot_reply, chat_id=placeholder_message.chat_id,
-                                            message_id=placeholder_message.message_id)
+        try:
+            html_text = telebot.formatting.escape_html(bot_reply)
+            bot.send_message(chat_id, html_text, parse_mode='HTML')
+        except Exception as err:
+            print(err)
+            bot.send_message(chat_id, bot_reply)
 
 
-if __name__ == '__main__':
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    start_handler = CommandHandler('start', start)
-    help_handler = CommandHandler('help', send_help)
-    new_handler = CommandHandler('new', send_new)
-    message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), echo)
-    photo_handler = MessageHandler(filters.PHOTO, handle_image)
-
-    application.add_handler(start_handler)
-    application.add_handler(help_handler)
-    application.add_handler(new_handler)
-    application.add_handler(message_handler)
-    application.add_handler(photo_handler)
-
-    application.run_polling()
+while True:
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        print(f"Bot polling failed, restarting in 5 seconds. Error:\n{e}")
+        time.sleep(5)
