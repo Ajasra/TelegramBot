@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from db_logging import write_history_to_db
 from gemini_api import handle_gemini_model, load_gemini_memory
 from helpers import format_text_to_html
-from messages import WELCOME_MESSAGE, HELP_MESSAGE, NEW_CONVERSATION_MESSAGE, TEST_MESSAGE
+from messages import WELCOME_MESSAGE, HELP_MESSAGE, NEW_CONVERSATION_MESSAGE
 from openai_api import handle_openai_model
 
 load_dotenv()
